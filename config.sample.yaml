@@ -49,11 +49,35 @@ convert_dates: true             # Convert relative dates to ISO format
 # Images
 # -----------------------------------------------------------------------------
 # Images are stored per-business: {image_dir}/{place_id}/profiles/ and /reviews/
-download_images: true
+download_images: false
 image_dir: "review_images"
 download_threads: 4
 max_width: 1200
 max_height: 1200
+
+# -----------------------------------------------------------------------------
+# Supabase Integration (optional)
+# -----------------------------------------------------------------------------
+# Fetches doctors from the Doctors table, fuzzy-matches their names against
+# scraped review text, and upserts matched reviews into the Testimonials table.
+#
+# Prerequisites — run supabase/add_google_review_id.sql in the Supabase SQL
+# editor before enabling this. It adds google_review_id (upsert key) and
+# match_score columns to Testimonials.
+use_supabase: false
+supabase:
+  url: "https://<project-ref>.supabase.co"
+  key: ""                           # service_role key (keep secret; use env var in production)
+  # When fetch_hospitals_from_db is true, the hospital's name and google_maps_url
+  # are resolved from the Hospitals table using hospital_id. The google_maps_url
+  # is used as the scrape target URL, replacing any hardcoded URL in businesses.
+  # Requires a google_maps_url column on the Hospitals table (see migration SQL).
+  # Set to false to use the hardcoded URL in businesses and hospital_name below.
+  fetch_hospitals_from_db: true
+  hospital_id: ""                   # UUID of the hospital row in Hospitals table
+  hospital_name: ""                 # Fallback display name (used when fetch_hospitals_from_db: false)
+  fuzzy_threshold: 85               # 0–100 rapidfuzz partial_ratio cutoff (85 recommended)
+  sync_mode: "new_only"             # new_only = skip existing rows | update = upsert all
 
 # -----------------------------------------------------------------------------
 # MongoDB Sync (optional - global defaults)
@@ -146,6 +170,7 @@ store_local_paths: true         # Store local filenames in local_images/local_pr
 backup_to_json: true
 json_path: "google_reviews.json"
 
+
 # -----------------------------------------------------------------------------
 # Businesses
 # -----------------------------------------------------------------------------
@@ -160,14 +185,14 @@ json_path: "google_reviews.json"
 # Advanced setup (per-business overrides):
 businesses:
   - url: "https://maps.app.goo.gl/PLACE_1"
-    custom_params:
-      company: "Company A"
-      source: "Google Maps"
+    supabase:
+      hospital_id: "hospital-uuid-1"
+      hospital_name: "Hospital A"
 
   - url: "https://maps.app.goo.gl/PLACE_2"
-    custom_params:
-      company: "Company B"
-      source: "Google Maps"
+    supabase:
+      hospital_id: "hospital-uuid-2"
+      hospital_name: "Hospital B"
     # Override MongoDB for this business (different server/database)
     # mongodb:
     #   uri: "mongodb://other-server:27017"

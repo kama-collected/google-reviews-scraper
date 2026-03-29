@@ -269,6 +269,113 @@ class JSONTask(SyncTask):
         pass
 
 
+class SupabaseTestimonialsTask(SyncTask):
+    """
+    Post-scrape writer task that fuzzy-matches review text against doctor names
+    fetched from Supabase and upserts matched reviews as Testimonials rows.
+
+    Enabled when config.use_supabase is True.
+    """
+
+    name = "supabase_testimonials"
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self._handler = None  # lazy init
+
+    @property
+    def enabled(self) -> bool:
+        return self.config.get("use_supabase", False)
+
+    def _ensure_handler(self):
+        if self._handler is None:
+            from modules.supabase_handler import SupabaseHandler
+            self._handler = SupabaseHandler(self.config)
+
+    def run(self, reviews: Dict[str, Dict[str, Any]], place_id: str) -> None:
+        from modules.name_matcher import find_all_doctors_in_review
+
+        self._ensure_handler()
+        supabase_cfg = self.config.get("supabase", {})
+        hospital_id = supabase_cfg.get("hospital_id", "") or None
+        threshold = supabase_cfg.get("fuzzy_threshold", 85)
+
+        if not hospital_id:
+            log.error(
+                "Supabase: hospital_id is not set — refusing to fetch all doctors. "
+                "Set supabase.hospital_id per business in config.yaml."
+            )
+            return
+
+        # Resolve hospital_name — from Hospitals table or config fallback
+        hospital_name = supabase_cfg.get("hospital_name", "")
+        if supabase_cfg.get("fetch_hospitals_from_db", True):
+            hospitals = self._handler.get_hospitals()
+            matched_hospital = next(
+                (h for h in hospitals if h.get("id") == hospital_id), None
+            )
+            if matched_hospital:
+                hospital_name = matched_hospital.get("name", hospital_name)
+            else:
+                log.warning(
+                    "Supabase: hospital_id '%s' not found in Hospitals table, "
+                    "falling back to config hospital_name",
+                    hospital_id,
+                )
+
+        # Fetch doctors scoped to this hospital only — ensures doctors with the
+        # same name at different hospitals are never matched to the wrong hospital.
+        doctors = self._handler.get_doctors(hospital_id=hospital_id)
+        if not doctors:
+            log.warning("Supabase: no doctors found for hospital_id=%s, skipping", hospital_id)
+            return
+
+        matched_count = 0
+        skipped_count = 0
+
+        for review in reviews.values():
+            # review_text is stored as {lang_code: text_string} after deserialization
+            review_text_raw = review.get("review_text", {})
+            if isinstance(review_text_raw, dict):
+                review_text = " ".join(review_text_raw.values())
+            else:
+                review_text = str(review_text_raw) if review_text_raw else ""
+
+            if not review_text.strip():
+                skipped_count += 1
+                continue
+
+            matched_doctors = find_all_doctors_in_review(review_text, doctors, threshold)
+            for doctor_id, doctor_name, score in matched_doctors:
+                # Always use the hospital_id from config/Supabase for this business,
+                # not the doctor record — guarantees correct hospital assignment even
+                # when doctors share names across hospitals.
+                testimonial = {
+                    "hospital_id": hospital_id,
+                    "doctor_id": doctor_id,
+                    "rating": int(round(review.get("rating") or 0)),
+                    "content": review_text,
+                    "hospital_name": hospital_name or None,
+                    "doctor_name": doctor_name,
+                    # TODO: rename 'title' column to 'reviewer_name' and drop 'reviewer'
+                    "title": review.get("author", ""),
+                    "match_score": int(round(score)),
+                    "google_review_id": review.get("review_id"),
+                }
+                self._handler.upsert_testimonial(testimonial)
+                matched_count += 1
+
+        log.info(
+            "Supabase testimonials: %d upserted, %d skipped (no text)",
+            matched_count,
+            skipped_count,
+        )
+
+    def close(self) -> None:
+        if self._handler:
+            self._handler.close()
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -289,6 +396,7 @@ class PostScrapeRunner:
             CustomParamsTask(self.config),
             MongoDBTask(self.config),
             JSONTask(self.config),
+            SupabaseTestimonialsTask(self.config),
         ]
 
     def run(

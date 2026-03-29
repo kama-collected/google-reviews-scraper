@@ -28,7 +28,7 @@ DEFAULT_CONFIG = {
     "max_reviews": 0,
     "max_scroll_attempts": 50,
     "scroll_idle_limit": 15,
-    "use_mongodb": True,
+    "use_mongodb": False,
     "mongodb": {
         "uri": "mongodb://localhost:27017",
         "database": "reviews",
@@ -48,10 +48,7 @@ DEFAULT_CONFIG = {
     "custom_url_profiles": "/profiles/",  # Path for profile images
     "custom_url_reviews": "/reviews/",  # Path for review images
     "preserve_original_urls": True,  # Option to preserve original URLs
-    "custom_params": {  # Custom parameters to add to each document
-        "company": "Thaitours",  # Default example
-        "source": "Google Maps"  # Default example
-    },
+    "custom_params": {},  # Custom parameters to add to each document
     "s3": {
         "provider": "aws",
         "endpoint_url": None,
@@ -64,6 +61,18 @@ DEFAULT_CONFIG = {
     "log_file": "scraper.log",
     "db_path": "reviews.db",
     "stop_threshold": 3,
+    # Supabase integration (optional)
+    "use_supabase": False,
+    "supabase": {
+        "url": "",
+        "key": "",                          # service_role or anon key
+        "fetch_hospitals_from_db": True,    # True  = resolve hospital_name + google_maps_url from Hospitals table
+                                            # False = use hospital_id / hospital_name below as-is
+        "hospital_id": "",                  # UUID from Hospitals table (used in both modes)
+        "hospital_name": "",                # Display-name fallback (used when fetch_hospitals_from_db: False)
+        "fuzzy_threshold": 85,              # 0–100 rapidfuzz partial_ratio cutoff
+        "sync_mode": "new_only",            # new_only | update
+    },
 }
 
 

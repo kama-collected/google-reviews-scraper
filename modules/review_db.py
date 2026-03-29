@@ -749,7 +749,8 @@ class ReviewDB:
         result = {}
         for place in places:
             pid = place["place_id"]
-            path = os.path.join(output_dir, f"reviews_{pid}.csv")
+            safe_pid = pid.replace(":", "_")
+            path = os.path.join(output_dir, f"reviews_{safe_pid}.csv")
             result[pid] = self.export_reviews_csv(pid, path, include_deleted)
         return result
 

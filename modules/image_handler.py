@@ -59,7 +59,8 @@ class ImageHandler:
     def set_place_id(self, place_id: str):
         """Set place ID to organize images into per-business subdirectories."""
         self._place_id = place_id
-        base = self.image_dir / place_id
+        safe_place_id = place_id.replace(":", "_")
+        base = self.image_dir / safe_place_id
         self.profile_dir = base / "profiles"
         self.review_dir = base / "reviews"
 

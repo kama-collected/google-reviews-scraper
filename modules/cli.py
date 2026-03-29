@@ -9,6 +9,7 @@ Subcommands:
   hide            Soft-delete a review
   restore         Restore a soft-deleted review
   sync-status     Show sync checkpoint status
+  push-supabase   Push all DB reviews to Supabase Testimonials
   prune-history   Prune old audit history entries
   migrate         Import existing JSON/MongoDB data into SQLite
   api-key-create  Create a new API key
@@ -205,6 +206,21 @@ def _build_management_parsers(sub: argparse._SubParsersAction) -> None:
     # sync-status
     sp = sub.add_parser("sync-status", help="Show sync checkpoint status")
     _add_common_args(sp)
+
+    # push-supabase
+    sp = sub.add_parser(
+        "push-supabase",
+        help="Push all reviews from DB to Supabase Testimonials (re-runs matching without re-scraping)",
+    )
+    _add_common_args(sp)
+    sp.add_argument(
+        "--place-id",
+        help="push only this place ID (default: all places)",
+    )
+    sp.add_argument(
+        "--include-deleted", action="store_true",
+        help="include soft-deleted reviews",
+    )
 
     # prune-history
     sp = sub.add_parser("prune-history", help="Prune old audit history entries")

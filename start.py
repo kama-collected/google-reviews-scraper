@@ -64,7 +64,54 @@ def _get_db_path(config, args):
 
 
 def _resolve_businesses(config):
-    """Resolve business list from config (supports businesses, urls, or url)."""
+    """Resolve business list from config or Supabase Hospitals table.
+
+    When use_supabase is true and fetch_hospitals_from_db is true, queries
+    Supabase for all hospitals and builds the businesses list from their
+    hospital_id, name and google_maps_url columns. Each hospital becomes one
+    business entry with its supabase.hospital_id and supabase.hospital_name
+    pre-filled so the pipeline assigns testimonials to the right hospital.
+
+    Falls back to the config businesses/urls list in all other cases.
+    """
+    supabase_cfg = config.get("supabase", {})
+    if config.get("use_supabase") and supabase_cfg.get("fetch_hospitals_from_db"):
+        try:
+            from modules.supabase_handler import SupabaseHandler
+            handler = SupabaseHandler(config)
+            if handler.connect():
+                hospitals = handler.get_hospitals()
+                handler.close()
+                if hospitals:
+                    businesses = []
+                    for h in hospitals:
+                        url = h.get("google_maps_url", "").strip()
+                        if not url:
+                            print(
+                                f"  [fetch_hospitals_from_db] Skipping hospital "
+                                f"'{h.get('name')}' — no google_maps_url set."
+                            )
+                            continue
+                        businesses.append({
+                            "url": url,
+                            "supabase": {
+                                "hospital_id": h["id"],
+                                "hospital_name": h.get("name", ""),
+                            },
+                        })
+                    if businesses:
+                        print(
+                            f"[fetch_hospitals_from_db] Loaded {len(businesses)} "
+                            f"hospital(s) from Supabase."
+                        )
+                        return businesses
+                    print(
+                        "[fetch_hospitals_from_db] No hospitals with a google_maps_url "
+                        "found — falling back to config businesses."
+                    )
+        except Exception as exc:
+            print(f"[fetch_hospitals_from_db] Failed to fetch hospitals: {exc} — falling back to config.")
+
     businesses = config.get("businesses", [])
     if businesses:
         # Each entry is a dict with 'url' + optional overrides
@@ -143,7 +190,8 @@ def _run_export(config, args):
                 print(text)
         elif fmt == "csv":
             if place_id:
-                path = output or f"reviews_{place_id}.csv"
+                safe_place_id = place_id.replace(":", "_")
+                path = output or f"reviews_{safe_place_id}.csv"
                 count = db.export_reviews_csv(place_id, path, include_deleted)
                 print(f"Exported {count} reviews to {path}")
             else:
@@ -240,6 +288,73 @@ def _run_restore(config, args):
             print(f"Review {args.review_id} restored.")
         else:
             print(f"Review {args.review_id} not found or not hidden.")
+    finally:
+        db.close()
+
+
+def _run_push_supabase(config, args):
+    """Push all reviews from SQLite to Supabase Testimonials without re-scraping."""
+    from modules.review_db import ReviewDB
+    from modules.pipeline import SupabaseTestimonialsTask
+
+    if not config.get("use_supabase", False):
+        print("Supabase is not enabled. Set 'use_supabase: true' in config.yaml.")
+        return
+
+    db = ReviewDB(_get_db_path(config, args))
+    try:
+        place_id_filter = getattr(args, "place_id", None)
+        include_deleted = getattr(args, "include_deleted", False)
+        places = db.list_places()
+        if place_id_filter:
+            places = [p for p in places if p["place_id"] == place_id_filter]
+            if not places:
+                print(f"No place found with ID: {place_id_filter}")
+                return
+
+        # Build a map of original_url → merged per-business config so each
+        # place gets the correct hospital_id (and other per-business settings)
+        # rather than falling back to the bare global config.
+        businesses = _resolve_businesses(config)
+        url_to_biz_config = {
+            biz.get("url", ""): _build_business_config(config, biz)
+            for biz in businesses
+        }
+
+        total = 0
+        for place in places:
+            pid = place["place_id"]
+            original_url = place.get("original_url", "")
+            biz_config = url_to_biz_config.get(original_url) or config
+            supabase_hospital_id = (
+                biz_config.get("supabase", {}).get("hospital_id", "") or ""
+            )
+            if not supabase_hospital_id:
+                print(
+                    f"  {pid}: skipped — no supabase.hospital_id configured "
+                    f"for URL '{original_url}'. Add it under the matching entry "
+                    f"in 'businesses' in config.yaml."
+                )
+                continue
+
+            rows = db.get_reviews(pid, include_deleted=include_deleted)
+            if not rows:
+                print(f"  {pid}: no reviews, skipping")
+                continue
+
+            print(
+                f"  {pid} (hospital_id={supabase_hospital_id}): "
+                f"pushing {len(rows)} reviews..."
+            )
+            reviews = {r["review_id"]: r for r in rows}
+            task = SupabaseTestimonialsTask(biz_config)
+            try:
+                task.run(reviews, pid)
+            finally:
+                task.close()
+            total += len(rows)
+
+        print(f"Done. Processed {total} review(s) across {len(places)} place(s).")
     finally:
         db.close()
 
@@ -500,6 +615,7 @@ def main():
         "hide": _run_hide,
         "restore": _run_restore,
         "sync-status": _run_sync_status,
+        "push-supabase": _run_push_supabase,
         "prune-history": _run_prune_history,
         "migrate": _run_migrate,
         "api-key-create": _run_api_key_create,
