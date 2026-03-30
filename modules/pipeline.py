@@ -345,6 +345,10 @@ class SupabaseTestimonialsTask(SyncTask):
                 skipped_count += 1
                 continue
 
+            if (review.get("rating") or 0) < 4.5:
+                skipped_count += 1
+                continue
+
             matched_doctors = find_all_doctors_in_review(review_text, doctors, threshold)
             for doctor_id, doctor_name, score in matched_doctors:
                 # Always use the hospital_id from config/Supabase for this business,

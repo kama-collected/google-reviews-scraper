@@ -173,8 +173,25 @@ def find_all_doctors_in_review(
         if not norm_name:
             continue
 
+        # Skip names too short to match reliably — avoids single letters and
+        # short tokens (e.g. "goon", "sook") matching common English words.
+        if len(norm_name) < 5:
+            log.debug(
+                "Skipping doctor %r — normalised name too short: %r",
+                raw_name, norm_name,
+            )
+            continue
+
         score = fuzz.partial_ratio(norm_name, text_lower)
         if score >= threshold:
+            # Whole-word guard: at least one name token must appear as a
+            # standalone word — prevents "goon" matching "good", etc.
+            name_tokens = norm_name.split()
+            if not any(
+                re.search(r"\b" + re.escape(tok) + r"\b", text_lower)
+                for tok in name_tokens
+            ):
+                continue
             log.debug(
                 "Text match: doctor %r in review (score=%d, id=%s)",
                 raw_name, score, doctor["id"],
