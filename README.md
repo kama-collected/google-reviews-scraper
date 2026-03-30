@@ -24,6 +24,7 @@
 - **Time-Bending Magic**: Transforms Google's vague "2 weeks ago" garbage into precise ISO timestamps
 - **Battle-Hardened Resilience**: Network hiccups? Google's tricks? HAH! We eat those for breakfast
 - **Structured Logging**: Rich colored CLI output + rotating JSON log files in `logs/`. Filter and follow logs via `python start.py logs`
+- **Supabase Testimonials Pipeline**: Pulls hospitals and doctors from Supabase, fuzzy-matches doctor names against scraped review text, and upserts matched reviews into a Testimonials table. Supports Malaysian/regional honorific stripping (Dato', Datuk, Prof. Dr., etc.) with a configurable rapidfuzz threshold.
 
 ## Battle Station Requirements
 
@@ -35,6 +36,7 @@ Chrome browser (the fresher the better)
 Optional (but c'mon, live a little):
 - MongoDB (for syncing reviews to a MongoDB collection)
 - AWS S3 / Cloudflare R2 / MinIO / any S3-compatible storage (for cloud image storage)
+- Supabase (for doctor-matched testimonials pipeline)
 - Coffee (mandatory for watching thousands of reviews roll in)
 
 ## Deployment Instructions
@@ -173,6 +175,14 @@ See `config.sample.yaml` for all available settings and `config.businesses.sampl
 | | `log_file` | `"scraper.log"` | Log file name (inside `log_dir`) |
 | **JSON** | `backup_to_json` | `true` | Export JSON snapshot after each scrape |
 | | `json_path` | `"google_reviews.json"` | Output file path |
+| **Supabase** | `use_supabase` | `false` | Enable Supabase testimonials pipeline |
+| | `supabase.url` | `""` | Supabase project URL |
+| | `supabase.key` | `""` | `service_role` key (keep secret; use env var in production) |
+| | `supabase.fetch_hospitals_from_db` | `true` | Resolve hospital name and scrape URL from the Hospitals table |
+| | `supabase.hospital_id` | `""` | UUID of the hospital row in the Hospitals table |
+| | `supabase.hospital_name` | `""` | Fallback display name (used when `fetch_hospitals_from_db: false`) |
+| | `supabase.fuzzy_threshold` | `85` | rapidfuzz `partial_ratio` cutoff 0–100 (85 recommended) |
+| | `supabase.sync_mode` | `"new_only"` | `new_only` = skip existing rows \| `update` = upsert all |
 
 ## Unleashing Hell
 
@@ -268,6 +278,19 @@ python start.py prune-history --dry-run
 python start.py prune-history --older-than 90
 ```
 
+### Supabase Push
+
+```bash
+# Push all reviews from SQLite to Supabase Testimonials (re-runs matching without re-scraping)
+python start.py push-supabase
+
+# Push only a specific place
+python start.py push-supabase --place-id "0x305037cbd917b293:0"
+
+# Include soft-deleted reviews in the push
+python start.py push-supabase --include-deleted
+```
+
 ### Data Migration
 
 ```bash
@@ -280,6 +303,46 @@ python start.py migrate --source mongodb
 # Associate imported data with a specific place URL
 python start.py migrate --source json --json-path reviews.json --place-url "https://maps.app.goo.gl/YOUR_URL"
 ```
+
+## Supabase Integration
+
+Connects the scraper to a Supabase backend to power a doctor testimonials pipeline. On each scrape run (or via `push-supabase`), the scraper:
+
+1. **Resolves hospitals** — queries the `Hospitals` table and uses each hospital's `google_maps_url` as the scrape target (when `fetch_hospitals_from_db: true`). No more hardcoding URLs.
+2. **Fetches doctors** — loads the doctor roster from the `Doctors` table, scoped to the current hospital.
+3. **Fuzzy-matches names** — scans every review's text for doctor name mentions using [rapidfuzz](https://github.com/rapidfuzz/rapidfuzz-python) `partial_ratio`. Titles and honorifics (Dr., Prof., Dato', Datuk, Tan Sri, etc.) are stripped before comparison.
+4. **Upserts testimonials** — matched reviews are written to the `Testimonials` table with `google_review_id` + `doctor_id` as the conflict key, making re-runs fully idempotent.
+
+### Prerequisites
+
+Run `supabase/add_google_review_id.sql` in the Supabase SQL editor before enabling. This adds the `google_review_id` (upsert key) and `match_score` columns to the `Testimonials` table.
+
+### Config
+
+```yaml
+use_supabase: true
+supabase:
+  url: "https://<project-ref>.supabase.co"
+  key: ""                           # service_role key
+  fetch_hospitals_from_db: true     # auto-build business list from Hospitals table
+  hospital_id: ""                   # UUID of the hospital row (used per-business)
+  hospital_name: ""                 # fallback if fetch_hospitals_from_db: false
+  fuzzy_threshold: 85               # 0–100 rapidfuzz partial_ratio cutoff
+  sync_mode: "new_only"             # new_only | update
+
+businesses:
+  - url: "https://maps.app.goo.gl/PLACE_1"
+    supabase:
+      hospital_id: "hospital-uuid-1"
+      hospital_name: "Hospital A"
+
+  - url: "https://maps.app.goo.gl/PLACE_2"
+    supabase:
+      hospital_id: "hospital-uuid-2"
+      hospital_name: "Hospital B"
+```
+
+> **Security note:** Never commit your `service_role` key. Use an environment variable or secret manager in production.
 
 ## API Server Mode
 
