@@ -74,8 +74,6 @@ supabase:
   # Requires a google_maps_url column on the Hospitals table (see migration SQL).
   # Set to false to use the hardcoded URL in businesses and hospital_name below.
   fetch_hospitals_from_db: true
-  hospital_id: ""                   # UUID of the hospital row in Hospitals table
-  hospital_name: ""                 # Fallback display name (used when fetch_hospitals_from_db: false)
   fuzzy_threshold: 85               # 0–100 rapidfuzz partial_ratio cutoff (85 recommended)
   sync_mode: "new_only"             # new_only = skip existing rows | update = upsert all
 
