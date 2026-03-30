@@ -30,7 +30,7 @@ supabase:
 
 //
 
-businesses:
+businesses:                          # if fetch_hospital_from_db: false then fill these
   - url: "https://maps.app.goo.gl/PLACE_1"
     supabase:
       hospital_id: "hospital-uuid-1"
